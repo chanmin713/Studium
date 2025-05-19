@@ -103,7 +103,7 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage }) => {
   const inputHeight = isMobile ? 48 : 56; // 입력창 높이 (px)
 
   return (
-    <div className="relative w-full max-w-3xl mx-auto">
+    <div className="relative w-full max-w-3xl mx-auto transition-transform duration-200 ease-in-out hover:scale-105">
       {/* 입력창 */}
       <div className="relative  rounded-lg">
         <form onSubmit={handleSubmit} className="w-full">
@@ -127,12 +127,12 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage }) => {
             </div>
           )}
           <div
-            className="bg-white w-full flex flex-col gap-2 border rounded-xl sm:rounded-2xl border-gray-200 shadow-sm"
+            className="bg-white w-full flex flex-col border rounded-xl sm:rounded-2xl border-gray-200 shadow-sm"
             style={{ padding: `${containerPadding}px` }}
           >
             {/* 드래그된 파일 카드 표시 영역 */}
             {draggedFiles.length > 0 && (
-              <div className="p-2 bg-gray-50 rounded-lg border border-gray-200">
+              <div className="p-2 bg-gray-50 rounded-t-lg border border-gray-200 border-b-0">
                 <div className="flex flex-wrap gap-2">
                   {draggedFiles.map((file) => (
                     <div
@@ -167,7 +167,7 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage }) => {
 
             {/* 입력 영역 */}
             <div className="relative flex-1">
-              <div className="bg-gray-50 rounded-lg sm:rounded-xl border border-gray-200">
+              <div className="bg-gray-50 rounded-b-lg sm:rounded-b-xl border border-gray-200">
                 <div className="grid grid-cols-[auto_1fr_auto_auto] items-center w-full">
                   {/* 검색 아이콘 */}
                   <div className="flex items-center justify-center">

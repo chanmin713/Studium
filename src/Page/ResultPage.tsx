@@ -95,7 +95,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ messages, onSendMessage }) => {
     // 검색 시작 시 시스템 메시지 추가 - URL에 추가하지 않음
     const searchMessage = "검색 중입니다...";
     addSystemMessage(searchMessage, "text");
-    setLoadingMessage(searchMessage); // 명시적으로 검색 메시지 설정
+    setLoadingMessage("검색 중입니다..."); // 검색 요청 시 명확히 지정
     setExamProgress(null); // 시험지 생성 진행 상태 초기화
 
     // API 호출
@@ -195,8 +195,8 @@ const ChatPage: React.FC<ChatPageProps> = ({ messages, onSendMessage }) => {
 
   const handleExamProgress = (progressData: ExamProgressResponse) => {
     // exam_progress 타입일 때 로딩 메시지 업데이트
-    const examMessage = progressData.message || "시험지 생성을 시작합니다...";
-    setLoadingMessage(examMessage);
+    const examMessage = progressData.message || "시험지를 생성하고 있습니다...";
+    setLoadingMessage("시험지를 생성하고 있습니다..."); // 시험지 생성 시 명확히 지정
 
     // API 응답값을 활용하여 examProgress 상태 설정
     const now = Date.now();
