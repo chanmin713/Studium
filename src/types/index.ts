@@ -78,3 +78,15 @@ export interface ChatMessage {
   progress?: number;
   fileName?: string;
 }
+
+export interface SearchResult {
+  id: string;
+  title: string;
+  content: string;
+  url: string;
+  score: number;
+  source?: "orbi" | "sumanwhi";
+}
+
+export * from "./chat";
+export * from "./search";

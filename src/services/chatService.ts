@@ -1,252 +1,344 @@
-import { ChatMessage, ExamProgressResponse } from "../types";
-import { sendChatQuery, checkExamProgress } from "./api";
+import { errorService } from "./errorService";
+import {
+  ChatMessage,
+  ChatResponse,
+  ExamProgressResponse,
+  ExamResponse,
+  ExamStatus,
+  ProgressUpdate,
+} from "../types/chat";
+import { ResultItem } from "../types/search";
+import { sendChatQuery, checkExamProgress, downloadExam } from "./api";
 import { v4 as uuidv4 } from "uuid";
+
+declare global {
+  namespace NodeJS {
+    interface Timeout {}
+  }
+}
+
+export interface ExamProgress {
+  type: "exam";
+  requestId: string;
+  status: ExamStatus;
+  progress: number;
+  message?: string;
+  downloadUrl?: string;
+  error?: string;
+}
+
+export interface ChatServiceState {
+  messages: ChatMessage[];
+  isLoading: boolean;
+  error: string | null;
+  searchResults: {
+    orbiResults: ResultItem[] | null;
+    sumanwhiResults: ResultItem[] | null;
+  } | null;
+  examProgress: Record<string, ExamProgress>;
+}
 
 /**
  * 채팅 메시지 상태를 관리하는 서비스
  */
 export class ChatService {
-  private messages: ChatMessage[] = [];
-  private listeners: Array<(messages: ChatMessage[]) => void> = [];
-  private progressIntervals: Record<string, number> = {}; // 진행률 폴링 인터벌 ID 저장
+  private state: ChatServiceState = {
+    messages: [],
+    isLoading: false,
+    error: null,
+    searchResults: null,
+    examProgress: {},
+  };
+
+  private subscribers: ((state: ChatServiceState) => void)[] = [];
+  private progressCheckIntervals: Record<string, number> = {};
 
   /**
    * 메시지 변경 알림을 받을 리스너 등록
-   * @param listener 메시지 변경 시 호출될 콜백 함수
+   * @param callback 메시지 변경 시 호출될 콜백 함수
    * @returns 리스너 해제 함수
    */
-  subscribe(listener: (messages: ChatMessage[]) => void) {
-    this.listeners.push(listener);
-    listener([...this.messages]); // 초기 상태 전달
-
-    // 리스너 해제 함수 반환
+  public subscribeToState(callback: (state: ChatServiceState) => void) {
+    this.subscribers.push(callback);
+    callback(this.state);
     return () => {
-      this.listeners = this.listeners.filter((l) => l !== listener);
+      this.subscribers = this.subscribers.filter((cb) => cb !== callback);
     };
   }
 
-  /**
-   * 리스너들에게 메시지 변경 사항 알림
-   */
-  private notifyListeners() {
-    const messagesCopy = [...this.messages];
-    this.listeners.forEach((listener) => listener(messagesCopy));
+  private notifyStateChange() {
+    this.subscribers.forEach((callback) => callback(this.state));
+  }
+
+  private setState(newState: Partial<ChatServiceState>) {
+    this.state = { ...this.state, ...newState };
+    this.notifyStateChange();
   }
 
   /**
    * 사용자 메시지 추가 및 API 요청 처리
    * @param text 사용자가 입력한 메시지
    */
-  async sendMessage(text: string) {
-    // 사용자 메시지 추가
-    const userMessage: ChatMessage = {
-      id: uuidv4(),
-      text,
-      isUser: true,
-      timestamp: new Date(),
+  public async sendMessage(text: string): Promise<ChatResponse> {
+    try {
+      this.setLoading(true);
+      this.setError(null);
+
+      // 사용자 메시지 추가
+      const userMessage: ChatMessage = {
+        id: Date.now().toString(),
+        text,
+        isUser: true,
+        timestamp: new Date(),
+        type: "text",
+      };
+      this.addMessage(userMessage);
+
+      // API 요청
+      const response = await sendChatQuery(text);
+      return response;
+    } catch (error) {
+      console.error("[ChatService] 메시지 전송 실패:", error);
+      this.setError("메시지 전송에 실패했습니다. 다시 시도해주세요.");
+      throw error;
+    } finally {
+      this.setLoading(false);
+    }
+  }
+
+  private initializeExamProgress(requestId: string) {
+    this.setState({
+      examProgress: {
+        ...this.state.examProgress,
+        [requestId]: {
+          type: "exam",
+          requestId,
+          status: "processing",
+          progress: 0,
+          message: "시험지를 생성하고 있습니다...",
+        },
+      },
+    });
+  }
+
+  private handleProgressCompletion(
+    requestId: string,
+    response: ExamProgressResponse
+  ) {
+    this.setState({
+      examProgress: {
+        ...this.state.examProgress,
+        [requestId]: {
+          type: "exam",
+          requestId,
+          status: "completed",
+          progress: 100,
+          downloadUrl: response.downloadUrl,
+          message: "시험지가 생성되었습니다.",
+        },
+      },
+    });
+    this.stopProgressCheck(requestId);
+  }
+
+  private handleProgressFailure(requestId: string) {
+    this.setState({
+      examProgress: {
+        ...this.state.examProgress,
+        [requestId]: {
+          type: "exam",
+          requestId,
+          status: "failed",
+          progress: 0,
+          message: "시험지 생성에 실패했습니다.",
+        },
+      },
+    });
+    this.stopProgressCheck(requestId);
+  }
+
+  private handleProgressUpdate(
+    requestId: string,
+    response: ExamProgressResponse
+  ) {
+    this.setState({
+      examProgress: {
+        ...this.state.examProgress,
+        [requestId]: {
+          type: "exam",
+          requestId,
+          status: "processing",
+          progress: response.progress || 0,
+          message:
+            response.message || `시험지 생성 중... (${response.progress}%)`,
+        },
+      },
+    });
+  }
+
+  private handleProgressError(requestId: string, error: unknown) {
+    console.error("진행 상태 확인 실패:", error);
+    this.setState({
+      examProgress: {
+        ...this.state.examProgress,
+        [requestId]: {
+          type: "exam",
+          requestId,
+          status: "failed",
+          progress: 0,
+          message: "진행 상태 확인에 실패했습니다.",
+          error:
+            error instanceof Error
+              ? error.message
+              : "알 수 없는 오류가 발생했습니다",
+        },
+      },
+    });
+    this.stopProgressCheck(requestId);
+  }
+
+  private stopProgressCheck(requestId: string) {
+    if (this.progressCheckIntervals[requestId]) {
+      clearInterval(this.progressCheckIntervals[requestId]);
+      delete this.progressCheckIntervals[requestId];
+    }
+  }
+
+  private async startProgressCheck(requestId: string) {
+    this.stopProgressCheck(requestId);
+
+    const checkProgress = async () => {
+      try {
+        const response = await checkExamProgress(requestId);
+        switch (response.status) {
+          case "completed":
+            this.handleProgressCompletion(requestId, response);
+            break;
+          case "failed":
+            this.handleProgressFailure(requestId);
+            break;
+          case "processing":
+            this.handleProgressUpdate(requestId, response);
+            break;
+        }
+      } catch (error) {
+        this.handleProgressError(requestId, error);
+      }
     };
 
-    this.messages.push(userMessage);
-    this.notifyListeners();
+    await checkProgress();
+    this.progressCheckIntervals[requestId] = window.setInterval(
+      checkProgress,
+      1000
+    );
+  }
 
+  async downloadExam(requestId: string): Promise<Blob> {
     try {
-      // API 응답 처리
-      const response = await sendChatQuery(text);
-
-      let responseMessage: ChatMessage;
-
-      if (response.type === "search") {
-        // 검색 결과인 경우
-        responseMessage = {
-          id: uuidv4(),
-          text: "검색 결과를 찾았습니다.",
-          isUser: false,
-          timestamp: new Date(),
-          type: "text",
-        };
-
-        this.messages.push(responseMessage);
-        this.notifyListeners();
-      } else if (response.type === "exam") {
-        // 시험지 생성 완료인 경우
-        responseMessage = {
-          id: uuidv4(),
-          text: "시험지가 생성되었습니다.",
-          isUser: false,
-          timestamp: new Date(),
-          type: "file",
-          downloadUrl: response.downloadUrl,
-        };
-
-        this.messages.push(responseMessage);
-        this.notifyListeners();
-      } else if (response.type === "exam_progress") {
-        // 시험지 생성 진행 중인 경우
-        const progressMessageId = uuidv4();
-
-        // 진행 상태 메시지 추가
-        responseMessage = {
-          id: progressMessageId,
-          text: response.message || "시험지를 생성 중입니다...",
-          isUser: false,
-          timestamp: new Date(),
-          type: "progress",
-          requestId: response.requestId,
-          progress: 0, // 초기 진행률 0%
-        };
-
-        this.messages.push(responseMessage);
-        this.notifyListeners();
-
-        // 진행 상태 폴링 시작
-        this.startProgressPolling(progressMessageId, response.requestId);
-      } else if (response.type === "exam_download") {
-        // PDF 파일 다운로드 응답인 경우
-        responseMessage = {
-          id: uuidv4(),
-          text: "PDF 파일이 준비되었습니다.",
-          isUser: false,
-          timestamp: new Date(),
-          type: "pdf",
-          downloadUrl: response.examDownloadUrl,
-          fileName: "시험지.pdf",
-        };
-
-        this.messages.push(responseMessage);
-        this.notifyListeners();
-      }
-
-      return response;
-    } catch (error: any) {
-      // 오류 메시지 추가
-      const errorMessage: ChatMessage = {
-        id: uuidv4(),
-        text: `오류가 발생했습니다: ${error.message || "알 수 없는 오류"}`,
-        isUser: false,
-        timestamp: new Date(),
-      };
-
-      this.messages.push(errorMessage);
-      this.notifyListeners();
-
+      return await downloadExam(requestId);
+    } catch (error) {
+      console.error("시험지 다운로드 실패:", error);
       throw error;
-    }
-  }
-
-  /**
-   * 시험지 생성 진행 상태 폴링 시작
-   * @param messageId 진행률 표시할 메시지 ID
-   * @param requestId 시험지 생성 요청 ID
-   */
-  private startProgressPolling(messageId: string, requestId: string) {
-    // 이미 실행 중인 폴링이 있으면 중지
-    if (this.progressIntervals[messageId]) {
-      clearInterval(this.progressIntervals[messageId]);
-    }
-
-    // 1초마다 진행 상태 확인
-    this.progressIntervals[messageId] = window.setInterval(async () => {
-      try {
-        const progressData = await checkExamProgress(requestId);
-
-        // 메시지 찾기
-        const messageIndex = this.messages.findIndex(
-          (msg) => msg.id === messageId
-        );
-        if (messageIndex === -1) {
-          // 메시지가 없으면 폴링 중지
-          this.stopProgressPolling(messageId);
-          return;
-        }
-
-        // 메시지 업데이트
-        this.messages[messageIndex] = {
-          ...this.messages[messageIndex],
-          progress: progressData.progress,
-          text: progressData.message || this.messages[messageIndex].text,
-        };
-
-        // 완료된 경우
-        if (progressData.status === "completed" && progressData.downloadUrl) {
-          // 폴링 중지
-          this.stopProgressPolling(messageId);
-
-          // 진행 메시지를 완료 메시지로 변경
-          this.messages[messageIndex] = {
-            ...this.messages[messageIndex],
-            type: "file",
-            text: "시험지가 생성되었습니다.",
-            progress: 100,
-            downloadUrl: progressData.downloadUrl,
-          };
-        }
-
-        // 실패한 경우
-        if (progressData.status === "failed") {
-          // 폴링 중지
-          this.stopProgressPolling(messageId);
-
-          // 진행 메시지를 오류 메시지로 변경
-          this.messages[messageIndex] = {
-            ...this.messages[messageIndex],
-            type: "text",
-            text: `시험지 생성에 실패했습니다: ${
-              progressData.error || "알 수 없는 오류"
-            }`,
-          };
-        }
-
-        this.notifyListeners();
-      } catch (error) {
-        console.error("진행 상태 조회 오류:", error);
-      }
-    }, 1000); // 1초 간격으로 폴링
-  }
-
-  /**
-   * 진행 상태 폴링 중지
-   * @param messageId 메시지 ID
-   */
-  private stopProgressPolling(messageId: string) {
-    if (this.progressIntervals[messageId]) {
-      clearInterval(this.progressIntervals[messageId]);
-      delete this.progressIntervals[messageId];
     }
   }
 
   /**
    * 모든 메시지 가져오기
    */
-  getMessages(): ChatMessage[] {
-    return [...this.messages];
+  public getMessages(): ChatMessage[] {
+    return [...this.state.messages];
+  }
+
+  public getSearchResults() {
+    return this.state.searchResults;
+  }
+
+  public getExamProgress(requestId: string) {
+    return this.state.examProgress[requestId];
+  }
+
+  public isLoading(): boolean {
+    return this.state.isLoading;
+  }
+
+  public getError(): string | null {
+    return this.state.error;
   }
 
   /**
    * 모든 메시지 초기화
    */
-  clearMessages() {
-    // 모든 폴링 중지
-    Object.keys(this.progressIntervals).forEach((id) => {
-      clearInterval(this.progressIntervals[id]);
+  public clearMessages(): void {
+    Object.keys(this.progressCheckIntervals).forEach((id) => {
+      clearInterval(this.progressCheckIntervals[id]);
     });
-    this.progressIntervals = {};
-
-    this.messages = [];
-    this.notifyListeners();
+    this.setState({
+      messages: [],
+      error: null,
+      searchResults: null,
+    });
   }
 
   /**
    * 서비스 정리 (컴포넌트 언마운트 등에서 호출)
    */
-  dispose() {
-    // 모든 폴링 중지
-    Object.keys(this.progressIntervals).forEach((id) => {
-      clearInterval(this.progressIntervals[id]);
+  public cleanup(): void {
+    Object.keys(this.progressCheckIntervals).forEach((id) => {
+      clearInterval(this.progressCheckIntervals[id]);
     });
-    this.progressIntervals = {};
+    this.subscribers = [];
+  }
 
-    // 리스너 제거
-    this.listeners = [];
+  private createUserMessage(text: string): ChatMessage {
+    return {
+      id: uuidv4(),
+      text,
+      isUser: true,
+      timestamp: new Date(),
+      type: "text",
+    };
+  }
+
+  private createSystemMessage(text: string): ChatMessage {
+    return {
+      id: uuidv4(),
+      text,
+      isUser: false,
+      timestamp: new Date(),
+      type: "text",
+    };
+  }
+
+  public getState(): ChatServiceState {
+    return { ...this.state };
+  }
+
+  public getProgressStatus(requestId: string): ExamProgress | undefined {
+    return this.state.examProgress[requestId];
+  }
+
+  public isProgressComplete(requestId: string): boolean {
+    const progress = this.getProgressStatus(requestId);
+    return progress?.status === "completed";
+  }
+
+  public isProgressFailed(requestId: string): boolean {
+    const progress = this.getProgressStatus(requestId);
+    return progress?.status === "failed";
+  }
+
+  private setLoading(isLoading: boolean) {
+    this.setState({ isLoading });
+  }
+
+  private setError(error: string | null) {
+    this.setState({ error });
+  }
+
+  private addMessage(message: ChatMessage) {
+    this.setState({
+      messages: [...this.state.messages, message],
+    });
   }
 }
 

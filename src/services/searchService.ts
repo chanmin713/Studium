@@ -1,4 +1,5 @@
-import { ResultItem, SearchResponse } from "../types";
+import { ResultItem, SearchResponse, SearchResult } from "../types";
+import { errorService } from "./errorService";
 
 /**
  * 검색 서비스 상태 인터페이스
@@ -57,12 +58,17 @@ export class SearchService {
    * @param response 검색 API 응답
    */
   processSearchResponse(response: SearchResponse) {
-    // API 응답에서 직접 결과 가져오기
-    this.orbiResults = response.orbiResults || [];
-    this.sumanwhiResults = response.sumanwhiResults || [];
-    this.keywords = response.keywords || [];
+    try {
+      // API 응답에서 직접 결과 가져오기
+      this.orbiResults = response.orbiResults || [];
+      this.sumanwhiResults = response.sumanwhiResults || [];
+      this.keywords = response.keywords || [];
 
-    this.notifyListeners();
+      this.notifyListeners();
+    } catch (error) {
+      errorService.handle(error);
+      this.clearResults();
+    }
   }
 
   /**
@@ -113,6 +119,32 @@ export class SearchService {
     this.sumanwhiResults = [];
     this.keywords = [];
     this.notifyListeners();
+  }
+
+  /**
+   * 검색 요청 처리
+   * @param query 검색어
+   */
+  public async search(query: string): Promise<void> {
+    try {
+      const response = await fetch("/api/search", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ query }),
+      });
+
+      if (!response.ok) {
+        throw new Error("검색 요청 처리 중 오류가 발생했습니다.");
+      }
+
+      const data = await response.json();
+      this.processSearchResponse(data);
+    } catch (error) {
+      errorService.handle(error);
+      this.clearResults();
+    }
   }
 }
 

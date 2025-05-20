@@ -1,14 +1,12 @@
 import React from "react";
-import { useNavigate } from "react-router-dom";
 import ChatInput from "../components/ChatInput";
 import mainPageTexts from "../data/mainPageTexts";
 
 interface MainPageProps {
-  onSendMessage: (text: string) => void;
+  onSendMessage?: (text: string) => void;
 }
 
 const MainPage: React.FC<MainPageProps> = ({ onSendMessage }) => {
-  const navigate = useNavigate();
   const [currentIdx, setCurrentIdx] = React.useState(0);
   const [shuffled, setShuffled] = React.useState<string[]>([]);
   const [fade, setFade] = React.useState(true);
@@ -37,16 +35,6 @@ const MainPage: React.FC<MainPageProps> = ({ onSendMessage }) => {
     };
   }, [currentIdx, shuffled]);
 
-  const handleSendMessage = (message: string) => {
-    console.log("[MainPage] 메시지 전송:", message);
-
-    // 부모 컴포넌트의 onSendMessage 호출
-    onSendMessage(message);
-
-    // SearchPageWrapper 컴포넌트로 라우팅하여 처리
-    navigate(`/search/${encodeURIComponent(message)}`);
-  };
-
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-white via-pink-50 to-blue-50">
       <div className="w-full max-w-2xl px-4 py-8 sm:py-12">
@@ -71,7 +59,7 @@ const MainPage: React.FC<MainPageProps> = ({ onSendMessage }) => {
           </p>
         </div>
 
-        <ChatInput onSendMessage={handleSendMessage} />
+        <ChatInput onSendMessage={onSendMessage} />
       </div>
     </div>
   );

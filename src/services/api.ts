@@ -1,120 +1,155 @@
-import { ChatResponse, ProgressResponse } from "../types";
+import { errorService } from "./errorService";
+import { fileService } from "./fileService";
+import { ApiError, ChatResponse, ExamProgressResponse } from "../types/chat";
 
 const API_BASE_URL = "http://52.79.40.102:3049";
+const API_TIMEOUT = 30000; // 30초 타임아웃
 
 // 마지막 로그 시간 추적 (중복 로깅 방지)
 let lastChatLogTime = 0;
 let lastProgressLogTime = 0;
+
+async function handleApiError(response: Response): Promise<never> {
+  try {
+    const errorData = await response.json();
+    const error: ApiError = {
+      message: errorData?.message || `서버 응답 오류 (${response.status})`,
+      code: errorData?.code,
+      details: errorData?.details,
+    };
+    throw error;
+  } catch (e) {
+    // JSON 파싱 실패 시 기본 에러 메시지 사용
+    const error: ApiError = {
+      message: `서버 응답 오류 (${response.status})`,
+      code: "UNKNOWN_ERROR",
+      details: e instanceof Error ? e.message : String(e),
+    };
+    throw error;
+  }
+}
+
+/**
+ * 타임아웃이 있는 fetch 요청을 수행합니다.
+ */
+async function fetchWithTimeout(
+  url: string,
+  options: RequestInit,
+  timeout: number
+): Promise<Response> {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeout);
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+    clearTimeout(id);
+    return response;
+  } catch (error) {
+    clearTimeout(id);
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(
+        "서버 연결 시간이 초과되었습니다. 잠시 후 다시 시도해주세요."
+      );
+    }
+    throw error;
+  }
+}
 
 /**
  * 채팅 API를 호출하여 검색 결과 또는 시험지 생성 결과를 가져옵니다.
  * @param query 사용자가 입력한 질문 또는 명령
  * @returns API 응답 (검색 결과 또는 시험지 다운로드 URL)
  */
-export const sendChatQuery = async (query: string): Promise<ChatResponse> => {
-  // 중복 로깅 방지 (최소 3초 간격으로 로깅)
-  const now = Date.now();
-  const shouldLog = now - lastChatLogTime > 3000;
-
-  if (shouldLog) {
-    console.log(
-      `[API] Chat 요청: ${query.substring(0, 50)}${
-        query.length > 50 ? "..." : ""
-      }`
-    );
-    lastChatLogTime = now;
-  }
-
+export async function sendChatQuery(query: string): Promise<ChatResponse> {
   try {
-    const response = await fetch(`${API_BASE_URL}/chat`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/chat`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ query }),
       },
-      body: JSON.stringify({ query }),
-    });
-
-    if (shouldLog) {
-      console.log(`[API] Chat 응답 상태: ${response.status}`);
-    }
+      API_TIMEOUT
+    );
 
     if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+      await handleApiError(response);
     }
 
-    // Content-Type 헤더 확인
     const contentType = response.headers.get("content-type");
-    if (contentType && contentType.includes("application/pdf")) {
-      // PDF 파일인 경우 blob으로 반환
-      const blob = await response.blob();
-      const blobUrl = URL.createObjectURL(blob);
-
-      if (shouldLog) {
-        console.log(`[API] PDF 응답 처리 완료`);
+    if (contentType?.includes("application/pdf")) {
+      const requestId = response.headers.get("X-Request-ID");
+      if (!requestId) {
+        throw new Error("요청 ID가 없습니다");
       }
-
       return {
-        type: "exam_download",
-        examDownloadUrl: blobUrl,
+        type: "exam",
+        requestId,
+        downloadUrl: URL.createObjectURL(await response.blob()),
       };
     }
 
-    // JSON 응답인 경우 파싱
     const data = await response.json();
-
-    if (shouldLog) {
-      console.log(`[API] Chat 응답 타입: ${data.type}`);
-    }
-
-    return data;
+    return data as ChatResponse;
   } catch (error) {
-    console.error("[API] Chat 요청 오류:", error);
+    if (error instanceof Error) {
+      if (error.message.includes("시간이 초과")) {
+        throw new Error(
+          "서버 연결 시간이 초과되었습니다. 잠시 후 다시 시도해주세요."
+        );
+      }
+      if (error.message.includes("Failed to fetch")) {
+        throw new Error(
+          "서버에 연결할 수 없습니다. 인터넷 연결을 확인해주세요."
+        );
+      }
+    }
+    console.error("채팅 요청 실패:", error);
     throw error;
   }
-};
+}
 
 /**
  * 시험지 생성 진행 상태를 조회합니다.
  * @param requestId 시험지 생성 요청 ID
  * @returns 진행 상태 정보
  */
-export const checkExamProgress = async (
+export async function checkExamProgress(
   requestId: string
-): Promise<ProgressResponse> => {
-  // 중복 로깅 방지 (최소 3초 간격으로 로깅)
-  const now = Date.now();
-  const shouldLog = now - lastProgressLogTime > 3000;
-
-  if (shouldLog) {
-    console.log(`[API] 진행 상태 조회: ${requestId}`);
-    lastProgressLogTime = now;
-  }
-
-  const response = await fetch(`${API_BASE_URL}/progress/${requestId}`, {
-    method: "GET",
-    headers: { "Content-Type": "application/json" },
-  });
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    console.error(`[API] 진행 상태 조회 실패:`, errorData);
-    throw new Error(
-      errorData.message || `진행 상태 조회 실패 (${response.status})`
+): Promise<ExamProgressResponse> {
+  try {
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/exam/progress/${requestId}`,
+      {},
+      API_TIMEOUT
     );
+    if (!response.ok) {
+      await handleApiError(response);
+    }
+    const data = await response.json();
+    return data as ExamProgressResponse;
+  } catch (error) {
+    if (error instanceof Error) {
+      if (error.message.includes("시간이 초과")) {
+        throw new Error(
+          "서버 연결 시간이 초과되었습니다. 잠시 후 다시 시도해주세요."
+        );
+      }
+      if (error.message.includes("Failed to fetch")) {
+        throw new Error(
+          "서버에 연결할 수 없습니다. 인터넷 연결을 확인해주세요."
+        );
+      }
+    }
+    console.error("시험 진행 상태 확인 실패:", error);
+    throw error;
   }
-
-  const data = await response.json();
-
-  if (shouldLog) {
-    console.log(
-      `[API] 진행 상태: ${data.status || "없음"}, 진행률: ${
-        data.progress || 0
-      }%`
-    );
-  }
-
-  return data as ProgressResponse;
-};
+}
 
 /**
  * 시험지 파일을 다운로드합니다.
@@ -150,3 +185,16 @@ export const downloadExamFile = async (url: string): Promise<void> => {
     throw error;
   }
 };
+
+export async function downloadExam(requestId: string): Promise<Blob> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/exam/download/${requestId}`);
+    if (!response.ok) {
+      await handleApiError(response);
+    }
+    return await response.blob();
+  } catch (error) {
+    console.error("시험지 다운로드 실패:", error);
+    throw error;
+  }
+}

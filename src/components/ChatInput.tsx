@@ -1,8 +1,13 @@
 import React, { useState, useEffect, useRef } from "react";
 import { PaperclipIcon, Search, ArrowUp, X, File } from "lucide-react";
+import { fileService } from "../services/fileService";
+import { errorService } from "../services/errorService";
+import { chatService } from "../services/chatService";
+import { useNavigate } from "react-router-dom";
 
 interface ChatInputProps {
-  onSendMessage: (message: string) => void;
+  onSendMessage?: (text: string) => void;
+  disabled?: boolean;
 }
 
 // 파일 정보 인터페이스
@@ -12,13 +17,18 @@ interface DraggedFile {
   modifiedDate: string;
 }
 
-const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage }) => {
+const ChatInput: React.FC<ChatInputProps> = ({
+  onSendMessage,
+  disabled = false,
+}) => {
+  const navigate = useNavigate();
   const [message, setMessage] = useState("");
   const [isMobile, setIsMobile] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [inputValue, setInputValue] = useState("");
   const [draggedFiles, setDraggedFiles] = useState<DraggedFile[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
 
   // 화면 크기 감지하여 모바일 여부 설정
   useEffect(() => {
@@ -31,36 +41,56 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage }) => {
     return () => window.removeEventListener("resize", checkScreenSize);
   }, []);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (inputValue.trim()) {
-      onSendMessage(inputValue);
-      setInputValue("");
+    if (!message.trim() || disabled || isLoading) return;
+
+    try {
+      setIsLoading(true);
+      setError(null);
+
+      // 부모 컴포넌트의 onSendMessage 호출 (있는 경우)
+      onSendMessage?.(message);
+
+      // chatService를 통해 메시지 전송
+      await chatService.sendMessage(message);
+
+      // 이미 SearchPageWrapper에서 처리하므로 여기서는 네비게이션하지 않음
+    } catch (error) {
+      console.error("[ChatInput] 메시지 전송 실패:", error);
+      setError("메시지 전송에 실패했습니다. 다시 시도해주세요.");
+    } finally {
+      setIsLoading(false);
+      setMessage("");
     }
   };
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const fileExtension = file.name.split(".").pop()?.toLowerCase();
-      const allowedExtensions = ["pdf", "hwp", "hwpx"];
+    if (!file) return;
 
-      if (fileExtension && allowedExtensions.includes(fileExtension)) {
-        // 여기에 파일 처리 로직을 추가할 수 있습니다
-        console.log("Selected file:", file);
-        setError(null);
-      } else {
-        setError("지원하지 않는 파일 형식입니다. (지원 형식: PDF, HWP, HWPX)");
-        // 파일 입력 초기화
-        if (fileInputRef.current) {
-          fileInputRef.current.value = "";
-        }
-      }
+    // 파일 크기 체크 (10MB)
+    if (file.size > 10 * 1024 * 1024) {
+      setError("파일 크기는 10MB를 초과할 수 없습니다.");
+      return;
     }
-  };
 
-  const handleFileButtonClick = () => {
-    fileInputRef.current?.click();
+    // 파일 형식 체크
+    const allowedTypes = [
+      "application/pdf",
+      "text/plain",
+      "application/msword",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ];
+    if (!allowedTypes.includes(file.type)) {
+      setError(
+        "지원하지 않는 파일 형식입니다. PDF, TXT, DOC, DOCX 파일만 업로드 가능합니다."
+      );
+      return;
+    }
+
+    setError(null);
+    // TODO: 파일 업로드 처리
   };
 
   // 드롭 이벤트 핸들러
@@ -96,6 +126,42 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage }) => {
     setDraggedFiles((prev) => prev.filter((file) => file.id !== id));
   };
 
+  const handleFileUpload = async (file: File) => {
+    try {
+      // 파일 타입 및 크기 검증
+      const allowedTypes = ["application/pdf", "text/plain"];
+      const maxSize = 10 * 1024 * 1024; // 10MB
+
+      if (!fileService.validateFileType(file, allowedTypes)) {
+        throw new Error("지원하지 않는 파일 형식입니다.");
+      }
+
+      if (!fileService.validateFileSize(file, maxSize)) {
+        throw new Error("파일 크기가 너무 큽니다. (최대 10MB)");
+      }
+
+      const formData = await fileService.prepareFileUpload(file);
+
+      const response = await fetch("/api/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error("파일 업로드 중 오류가 발생했습니다.");
+      }
+
+      const data = await response.json();
+      onSendMessage?.(
+        `파일이 업로드되었습니다: ${file.name} (${fileService.formatFileSize(
+          file.size
+        )})`
+      );
+    } catch (error) {
+      errorService.handle(error);
+    }
+  };
+
   // 반응형 스타일 상수
   const buttonSize = isMobile ? 44 : 52; // 버튼 크기 (px)
   const iconSize = isMobile ? 20 : 22; // 아이콘 크기 (px)
@@ -105,14 +171,15 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage }) => {
   return (
     <div className="relative w-full max-w-3xl mx-auto transition-transform duration-200 ease-in-out hover:scale-105">
       {/* 입력창 */}
-      <div className="relative  rounded-lg">
+      <div className="relative rounded-lg">
         <form onSubmit={handleSubmit} className="w-full">
           <input
             type="file"
             ref={fileInputRef}
-            onChange={handleFileSelect}
+            onChange={handleFileChange}
             className="hidden"
-            accept=".pdf,.hwp,.hwpx"
+            accept=".pdf,.txt,.doc,.docx"
+            disabled={disabled || isLoading}
           />
           {error && (
             <div className="mb-2 p-2 bg-red-50 border border-red-200 rounded-lg flex items-center justify-between">
@@ -121,13 +188,16 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage }) => {
                 type="button"
                 onClick={() => setError(null)}
                 className="text-red-400 hover:text-red-600"
+                disabled={disabled || isLoading}
               >
                 <X size={16} />
               </button>
             </div>
           )}
           <div
-            className="bg-white w-full flex flex-col border rounded-xl sm:rounded-2xl border-gray-200 shadow-sm"
+            className={`bg-white w-full flex flex-col border rounded-xl sm:rounded-2xl border-gray-200 shadow-sm ${
+              disabled || isLoading ? "opacity-50 cursor-not-allowed" : ""
+            }`}
             style={{ padding: `${containerPadding}px` }}
           >
             {/* 드래그된 파일 카드 표시 영역 */}
@@ -156,6 +226,7 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage }) => {
                         className="p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-r-lg flex items-center"
                         onClick={() => removeFile(file.id)}
                         aria-label="파일 제거"
+                        disabled={disabled || isLoading}
                       >
                         <X size={13} />
                       </button>
@@ -214,9 +285,9 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage }) => {
                         msOverflowStyle: "none" /* IE and Edge */,
                         scrollbarWidth: "none" /* Firefox */,
                       }}
-                      placeholder="무엇이든 물어보세요..."
-                      value={inputValue}
-                      onChange={(e) => setInputValue(e.target.value)}
+                      placeholder="질문을 입력하세요..."
+                      value={message}
+                      onChange={(e) => setMessage(e.target.value)}
                       rows={1}
                       maxLength={500}
                       onDragStart={(e) => e.preventDefault()}
@@ -229,6 +300,7 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage }) => {
                       }}
                       onDrop={handleDrop}
                       onDragOver={handleDragOver}
+                      disabled={disabled || isLoading}
                     />
                   </div>
 
@@ -242,7 +314,8 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage }) => {
                         height: `${buttonSize}px`,
                       }}
                       aria-label="첨부 파일"
-                      onClick={handleFileButtonClick}
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={disabled || isLoading}
                     >
                       <PaperclipIcon size={iconSize} strokeWidth={1.8} />
                     </button>
@@ -252,7 +325,11 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage }) => {
                   <div className="flex items-center justify-center pr-1 sm:pr-2">
                     <button
                       type="submit"
-                      className="text-white rounded-lg flex items-center justify-center transition-all shadow-sm flex-shrink-0"
+                      className={`text-white rounded-lg flex items-center justify-center transition-all shadow-sm flex-shrink-0 ${
+                        disabled || isLoading
+                          ? "opacity-50 cursor-not-allowed"
+                          : ""
+                      }`}
                       style={{
                         background:
                           "linear-gradient(135deg, #fbc2eb 0%, #a6c1ee 100%)",
@@ -262,6 +339,7 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage }) => {
                         minHeight: `${buttonSize - (isMobile ? 8 : 10)}px`,
                       }}
                       aria-label="전송"
+                      disabled={disabled || isLoading}
                     >
                       <ArrowUp
                         size={isMobile ? iconSize - 2 : iconSize}

@@ -7,50 +7,51 @@ import {
   useParams,
 } from "react-router-dom";
 import Sidebar from "./components/Sidebar";
-import ChatPage from "./Page/ChatPage";
+import ChatPage from "./Page/ResultPage";
 import MainPage from "./Page/MainPage";
 import SettingsModal from "./components/SettingsModal";
 import "./index.css";
+import { ToastContainer } from "react-toastify";
+import "react-toastify/dist/ReactToastify.css";
+import { ChatMessage } from "./types/chat";
 
 // URL로 접근했을 때 사용할 wrapper 컴포넌트
 function SearchPageWrapper() {
   const { query } = useParams<{ query: string }>();
-  const [messages, setMessages] = useState<
-    Array<{
-      id: string;
-      text: string;
-      isUser: boolean;
-      timestamp: Date;
-    }>
-  >([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const navigate = useNavigate();
+  const [isInitialized, setIsInitialized] = useState(false);
 
   useEffect(() => {
-    if (query) {
+    if (query && !isInitialized) {
       console.log("[SearchPageWrapper] URL 쿼리 파라미터 처리:", query);
       // URL에서 디코딩된 검색어로 메시지 생성
       const decodedQuery = decodeURIComponent(query);
-      const userMessage = {
+      const userMessage: ChatMessage = {
         id: Date.now().toString(),
         text: decodedQuery,
         isUser: true,
         timestamp: new Date(),
+        type: "text",
       };
 
       // 메시지 설정
       setMessages([userMessage]);
+      setIsInitialized(true);
     }
-  }, [query]);
+  }, [query, isInitialized]);
 
   const handleSendMessage = (text: string) => {
     console.log("[SearchPageWrapper] 새 메시지 전송:", text);
-    const userMessage = {
+    const userMessage: ChatMessage = {
       id: Date.now().toString(),
       text,
       isUser: true,
       timestamp: new Date(),
+      type: "text",
     };
     setMessages([userMessage]);
+    setIsInitialized(false); // 새로운 메시지 전송 시 초기화 상태 리셋
     // 검색어를 URL에 인코딩하여 포함 (URL 변경으로 위의 useEffect 트리거)
     navigate(`/search/${encodeURIComponent(text)}`);
   };
@@ -66,24 +67,18 @@ function SearchPageWrapper() {
 }
 
 function AppContent() {
-  const [messages, setMessages] = useState<
-    Array<{
-      id: string;
-      text: string;
-      isUser: boolean;
-      timestamp: Date;
-    }>
-  >([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const navigate = useNavigate();
 
   const handleSendMessage = (text: string) => {
     console.log("[App] 메시지 전송:", text);
-    const userMessage = {
+    const userMessage: ChatMessage = {
       id: Date.now().toString(),
       text,
       isUser: true,
       timestamp: new Date(),
+      type: "text",
     };
     setMessages([userMessage]);
 
@@ -101,17 +96,22 @@ function AppContent() {
             element={<MainPage onSendMessage={handleSendMessage} />}
           />
           <Route path="/search/:query" element={<SearchPageWrapper />} />
-          <Route
-            path="/search"
-            element={
-              <ChatPage messages={messages} onSendMessage={handleSendMessage} />
-            }
-          />
         </Routes>
       </main>
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
+      />
+      <ToastContainer
+        position="top-right"
+        autoClose={3000}
+        hideProgressBar={false}
+        newestOnTop
+        closeOnClick
+        rtl={false}
+        pauseOnFocusLoss
+        draggable
+        pauseOnHover
       />
     </div>
   );

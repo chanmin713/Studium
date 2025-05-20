@@ -1,218 +1,170 @@
-# Studium API 가이드
+# 입시 특화 LLM API 명세서
 
-## 1. 엔드포인트 목록
+## 1. API 개요
 
-### 1.1. 채팅 요청 (시험지 생성 또는 검색)
+이 API는 입시 특화 LLM을 위한 백엔드 서비스입니다. 수학 관련 질문에 대한 답변과 맞춤형 수학 시험지 생성 기능을 제공합니다.
 
-- **URL**: `http://52.79.40.102:3049/chat`
-- **Method**: POST
-- **Content-Type**: `application/json`
+## 2. 기본 URL
 
-### 1.2. 진행 상태 확인
+```
+http://52.79.40.102:3049
+```
 
-- **URL**: `http://52.79.40.102:3049/progress/:id`
-- **Method**: GET
-- **파라미터**: `id` - 요청 ID
+## 3. 인증
 
-## 2. 요청 및 응답 형식
+현재 별도의 인증 과정은 없습니다.
 
-### 2.1. 채팅 요청 (POST `/chat`)
+## 4. 엔드포인트
+
+### 4.1 채팅 요청 (시험지 생성 또는 검색)
+
+**POST /chat**
+
+사용자 질문을 분석하여 시험지를 생성하거나 검색을 수행합니다.
 
 #### 요청 형식
 
 ```json
 {
-  "query": "미적분 어려운 문제로 시험지 만들어줘" // 사용자의 질의
+  "query": "미적분1 단원에서 난이도 7 수준으로 10문제 출제해줘"
 }
 ```
 
 #### 응답 형식
 
-응답은 세 가지 유형이 있습니다:
+시험지 생성 요청일 경우:
 
-1. **검색 결과 (JSON)**
+- Content-Type: application/pdf
+- Content-Disposition: attachment; filename="파일명.pdf"
+- 응답 본문: PDF 파일 바이너리 데이터
+
+검색 요청일 경우:
 
 ```json
 {
   "type": "search",
-  "orbiResults": [
+  "requestId": "1234567890123",
+  "combinedResults": [
     {
-      "title": "미적분 계산법",
-      "url": "https://orbi.kr/post/123",
-      "content": "미적분 관련 설명입니다...",
-      "timestamp": "2023-05-16",
-      "commentCount": 5,
-      "relevanceScore": 0.85
+      "title": "검색 결과 제목",
+      "url": "https://example.com/result",
+      "content": "검색 결과 내용...",
+      "relevanceScore": 0.95,
+      "source": "오르비"
     }
-  ],
-  "sumanwhiResults": [
-    {
-      "title": "미적분 문제 풀이",
-      "url": "https://sumanwhi.com/post/456",
-      "content": "미적분 문제 풀이 방법...",
-      "timestamp": "2023-05-15",
-      "commentCount": 3,
-      "relevanceScore": 0.75
-    }
+    // 추가 결과...
   ]
 }
 ```
 
-2. **시험지 생성 시작 (JSON)**
+### 4.2 진행 상태 확인
 
-```json
-{
-  "type": "exam_progress",
-  "requestId": "1620285871234",
-  "message": "시험지 생성이 시작되었습니다."
-}
-```
+**GET /progress/:id**
 
-3. **시험지 생성 완료 (JSON)**
-
-```json
-{
-  "type": "exam",
-  "downloadUrl": "http://52.79.40.102:3049/files/exam_123456.pdf"
-}
-```
-
-### 2.2. 진행 상태 확인 (GET `/progress/:id`)
+요청 처리 진행 상태를 확인합니다.
 
 #### 응답 형식
 
 ```json
 {
-  "status": "HTML 생성 중",
-  "progress": 70,
-  "message": "시험지 생성 중...",
-  "startTime": 1620285871234,
-  "estimatedSecondsLeft": 10,
-  "elapsedTimeSeconds": 5
+  "status": "PDF 생성 중",
+  "progress": 85,
+  "startTime": 1623456789000,
+  "estimatedSecondsLeft": 5,
+  "elapsedTimeSeconds": 10
 }
 ```
 
-## 3. 구현 가이드
+## 5. 시험지 생성 요청 예시
 
-### 3.1. 시험지 생성 요청 및 진행 상태 추적
+### 단일 단원 시험지 생성
 
-```typescript
-// 시험지 생성 요청
-async function requestExam(query: string) {
-  const response = await fetch("http://52.79.40.102:3049/chat", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ query }),
-  });
+```
+"미적분1 단원에서 난이도 5 수준으로 20문제 출제해줘"
+```
 
-  const data = await response.json();
+### 다중 단원 시험지 생성
 
-  if (data.type === "exam_progress") {
-    // 진행 상태 추적 시작
-    startProgressPolling(data.requestId);
-    return {
-      type: "exam_progress",
-      requestId: data.requestId,
-      message: data.message,
-    };
-  } else if (data.type === "exam") {
-    return {
-      type: "exam",
-      downloadUrl: data.downloadUrl,
-    };
-  } else {
-    return data;
+```
+"1~10번은 미적분1, 11~20번은 수열의 극한 단원에서 문제 출제해줘. 난이도는 1~5번은 3, 6~10번은 5, 11~15번은 7, 16~20번은 9로 해줘."
+```
+
+### 단원 지정 없이 난이도만 지정
+
+```
+"난이도 7~9 사이의 어려운 문제로 10문제 출제해줘"
+```
+
+## 6. 검색 요청 예시
+
+```
+"수능 미적분 킬러 문항 출제 경향이 어떻게 되나요?"
+"작년 수능 확률과 통계 문제 분석"
+```
+
+## 7. 구현 방법
+
+### 7.1 프론트엔드 연동
+
+1. POST 요청으로 사용자 질문 전송
+2. requestId를 받아 진행 상태 폴링
+3. PDF 다운로드 또는 검색 결과 표시
+
+```javascript
+// 시험지 생성 요청 예시
+async function generateExam(query) {
+  try {
+    const response = await fetch("http://52.79.40.102:3049/chat", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ query }),
+    });
+
+    if (response.headers.get("Content-Type") === "application/pdf") {
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = response.headers
+        .get("Content-Disposition")
+        .split("filename=")[1]
+        .replace(/"/g, "");
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } else {
+      const data = await response.json();
+      // 검색 결과 처리
+      return data;
+    }
+  } catch (error) {
+    console.error("Error:", error);
   }
 }
-
-// 진행 상태 폴링
-function startProgressPolling(requestId: string) {
-  const intervalId = setInterval(async () => {
-    try {
-      const response = await fetch(
-        `http://52.79.40.102:3049/progress/${requestId}`
-      );
-      const data = await response.json();
-
-      // UI 업데이트
-      updateProgressUI(data);
-
-      // 완료 또는 실패 시 폴링 중단
-      if (data.progress === 100 || data.status === "failed") {
-        clearInterval(intervalId);
-      }
-    } catch (error) {
-      console.error("진행 상태 확인 중 오류:", error);
-      clearInterval(intervalId);
-    }
-  }, 2000); // 2초마다 상태 확인
-}
 ```
 
-### 3.2. UI 컴포넌트 구현
+### 7.2 진행 상태 모니터링
 
-```typescript
-// LoadingIndicator 컴포넌트
-interface LoadingIndicatorProps {
-  message: string;
-  progress?: number;
-  type: "default" | "exam";
-}
+1. 요청 후 반환된 requestId 저장
+2. 주기적으로 `/progress/:id` 호출하여 진행 상태 확인
+3. progress가 100이 되면 완료
 
-const LoadingIndicator: React.FC<LoadingIndicatorProps> = ({
-  message,
-  progress,
-  type,
-}) => {
-  return (
-    <div className="w-full max-w-4xl mx-auto px-3 md:px-4 py-6">
-      <div className="border border-gray-200 bg-white rounded-lg p-6 shadow-sm">
-        <div className="flex items-center text-blue-500">
-          <Loader2 className="w-8 h-8 mr-4 animate-spin" />
-          <div>
-            <h3 className="text-lg font-semibold mb-1">{message}</h3>
-            {type === "exam" && progress !== undefined && (
-              <div className="w-full bg-gray-200 rounded-full h-2.5 mt-2">
-                <div
-                  className="bg-blue-500 h-2.5 rounded-full transition-all duration-300"
-                  style={{ width: `${progress}%` }}
-                />
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
-```
+### 7.3 PDF 다운로드 처리
 
-## 4. 주의사항 및 팁
+1. PDF 응답을 Blob으로 변환
+2. URL.createObjectURL로 다운로드 링크 생성
+3. 사용자에게 파일 저장 옵션 제공
 
-1. **진행 상태 추적**
+## 8. 에러 처리
 
-   - 요청 ID는 최대 1분 동안만 유효합니다.
-   - 폴링 간격은 2초로 설정하는 것이 권장됩니다.
-   - 진행 상태가 100%가 되거나 실패 상태가 되면 폴링을 중단해야 합니다.
+- 400: 잘못된 요청 (질문 누락 등)
+- 404: 리소스 없음 (진행 상태 ID 없음)
+- 500: 서버 오류
 
-2. **오류 처리**
+## 9. 제한 사항
 
-   - 네트워크 오류 발생 시 적절한 에러 메시지를 표시하세요.
-   - 504 Gateway Timeout 등의 오류가 발생할 경우 재시도 로직을 구현하세요.
-
-3. **UI/UX 고려사항**
-
-   - 로딩 상태를 명확하게 표시하세요.
-   - 진행률이 있는 경우 프로그레스 바를 표시하세요.
-   - 다운로드 링크는 사용자가 쉽게 클릭할 수 있도록 배치하세요.
-
-4. **모바일 지원**
-
-   - 모바일 환경에서도 원활하게 작동하도록 반응형으로 구현하세요.
-   - 파일 다운로드 처리가 모바일 브라우저에서 제대로 동작하는지 확인하세요.
-
-5. **보안**
-   - API 키나 민감한 정보는 클라이언트에 노출되지 않도록 주의하세요.
-   - CORS 설정이 올바르게 되어있는지 확인하세요.
+- 요청당 처리 시간: 최대 60초
+- 시험지 최대 문제 수: 권장 20문제 (과도한 문제 수는 지양)
+- 진행 상태는 완료 후 1분간만 유지
