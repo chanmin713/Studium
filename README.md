@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Studium
 
 스터디 그룹 관리 및 참여를 위한 웹 애플리케이션입니다.
@@ -29,3 +30,6 @@ npm run dev
 ```bash
 npm run build
 ```
+=======
+# Studium
+>>>>>>> 6998f8bd0218ceb9b70149958ab3961fb0a9a1f7
